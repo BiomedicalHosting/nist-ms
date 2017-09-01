@@ -1,0 +1,31 @@
+<link rel="import" href="../polymer/polymer.html">
+
+<dom-module id="reference-spectrum">
+  <template>
+  </template>
+  <script>
+    class ReferenceSpectrum extends Polymer.Element {
+
+      static get properties() {
+        return {
+          spectrum: {
+            type: Object,
+            value: undefined 
+          }
+        }
+      }
+
+      static get is() {
+        return 'reference-spectrum';
+      }
+
+      set spectrum(value) {
+        if (value) {
+          this.parentNode.referenceSpectrum = value;
+        }
+      }
+
+    };
+    window.customElements.define(ReferenceSpectrum.is, ReferenceSpectrum);
+  </script>
+</dom-module>

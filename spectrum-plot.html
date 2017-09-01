@@ -1,0 +1,606 @@
+<script src="../d3/d3.js"></script>
+<link rel="import" href="../polymer/polymer.html">
+<link rel="import" href="observed-spectrum.html">
+<link rel="import" href="reference-spectrum.html">
+<link rel="import" href="mspec-spectrum.html">
+
+<dom-module id="spectrum-plot">
+  <template>
+
+    <style>
+       :host {
+        font-family: sans-serif;
+      }
+      
+      rect {
+        fill: #fff;
+      }
+      
+      rect.zoom {
+        fill: #ccc;
+        fill-opacity: 0.5;
+      }
+      
+      svg .highlighted {
+        stroke-width: 3;
+        stroke: #d9d20e !important;
+      }
+      
+      svg .label {
+        fill: black;
+      }
+      
+      svg text {
+        -webkit-user-select: none;
+        -khtml-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        -o-user-select: none;
+        user-select: none;
+      }
+
+    </style>
+
+          <svg height="100%" width="100%" id="svg" ></svg>
+
+  </template>
+
+  <script>
+    class SpectrumPlot extends Polymer.mixinBehaviors([Polymer.IronResizableBehavior], Polymer.Element) {
+
+      constructor() {
+        super();
+        this.default_format = d3.scaleLinear().tickFormat();
+      }
+
+      static get is() {
+        return 'spectrum-plot';
+      }
+
+      _process_observed(new_value, old_value) {
+        if (new_value) {
+          if (typeof new_value === "string") {
+            if (new_value.endsWith(".mspec")) {
+              if(!this.obs_loader){
+                this.obs_loader = new MSPECSpectrum;
+                this.obs_viewer = new ObservedSpectrum;
+                this.obs_viewer.appendChild(this.obs_loader);
+                this.appendChild(this.obs_viewer);
+              }
+              this.obs_loader.src = new_value ;
+            }
+          } else {
+            this.peaks = this.peaks.filter(function(p){ return p.intensity < 0.0}) ;
+            for (var peak of new_value.peaks) {
+              this.peaks.push(peak);
+            }
+            this.plot_spectrum();
+          }
+        }
+      }
+
+      _process_reference(new_value, old_value) {
+        if (new_value) {
+          if (typeof new_value === "string") {
+            if (new_value.endsWith(".mspec")) {
+              if(!this.ref_loader){
+                this.ref_loader = new MSPECSpectrum;
+                this.ref_viewer = new ReferenceSpectrum;
+                this.ref_viewer.appendChild(this.ref_loader);
+                this.appendChild(this.ref_viewer);
+              }
+              this.ref_loader.src = new_value ;
+            }
+          } else {
+            this.peaks = this.peaks.filter(function(p){return p.intensity >= 0.0}) ;
+            for (var peak of new_value.peaks) {
+              peak.intensity *= -1.0;
+              this.peaks.push(peak);
+            }
+            this.plot_spectrum();
+          }
+        }
+      }
+
+      static get properties() {
+        return {
+          observedSpectrum: {
+            observer: '_process_observed'
+          },
+          referenceSpectrum: {
+            observer: '_process_reference'
+          },
+          peaks: {
+            type: Array,
+            value: function () {
+              return [];
+            }
+          },
+          structureLayout: {
+            type: Boolean,
+            value: false
+          },
+        }
+      }
+
+      key(d) {
+        // function used by d3 both to uniquely identify data points and to label the DOM elements...
+        if (d.intensity >= 0) {
+          return ('opeak' + d.mz).replace(".", "_").replace("-", "_");
+        } else {
+          return ('rpeak' + d.mz).replace(".", "_").replace("-", "_");
+        }
+      }
+
+      eliminate_overlap(draw_target){
+        var me = this ;
+        var vstatus = {} ;
+        draw_target.selectAll(".peaklabel").style("visibility", function(d){
+          if(me.target_zoom){
+            if(d.mz < me.target_zoom[0] || d.mz > me.target_zoom[1]){
+              vstatus[d.mz+":"+d.intensity] = "hidden"
+              return "hidden" ;
+            }else{
+              vstatus[d.mz+":"+d.intensity] = "maybe"
+              return "maybe"
+            }
+          } else {
+            vstatus[d.mz+":"+d.intensity] = "maybe";
+            return "maybe" ;
+          }
+        }) ;
+        draw_target.selectAll(".peaklabel").each(function(d1) {
+          var lab1 = this ;
+          var obox1 = lab1.getBoundingClientRect()
+          draw_target.selectAll(".peaklabel").each(function(d2){
+            var lab2 = this ;
+            if(lab1 == lab2){
+              return ;
+            }
+            var obox2 = lab2.getBoundingClientRect()
+            // https://stackoverflow.com/questions/12066870/how-to-check-if-an-element-is-overlapping-other-elements/12067046
+            var overlap = !(obox1.right < obox2.left || 
+                obox1.left > obox2.right || 
+                obox1.bottom < obox2.top || 
+                obox1.top > obox2.bottom)
+            if(overlap){
+              if(Math.abs(d1.intensity)<=Math.abs(d2.intensity)){
+                if(vstatus[d2.mz+":"+d2.intensity] != "hidden"){
+                  vstatus[d1.mz+":"+d1.intensity] = "hidden"
+                  lab1.style.visibility = "hidden" ;
+                }
+              }
+            } 
+          })
+          if(vstatus[d1.mz+":"+d1.intensity] == "maybe"){
+            vstatus[d1.mz+":"+d1.intensity] = "visible"
+            lab1.style.visibility = "visible" ;
+          }
+        }); 
+      }
+
+
+      plot_spectrum() {
+
+        this.observedURL = null ;
+        if(this.observedSpectrum){
+          if(this.observedSpectrum.Image){
+            this.observedURL = this.observedSpectrum.Image ;
+          } else {
+            if(this.observedSpectrum.PubChem){
+              this.observedURL = "https://pubchem.ncbi.nlm.nih.gov/image/imagefly.cgi?cid="+this.observedSpectrum.PubChem+"&width=300&height=300"
+            }
+          }
+        }
+
+        this.referenceURL = null ;
+        if(this.referenceSpectrum){
+          if(this.referenceSpectrum.Image){
+            this.referenceURL = this.referenceSpectrum.Image ;
+          } else {
+            if(this.referenceSpectrum.PubChem){
+              this.referenceURL = "https://pubchem.ncbi.nlm.nih.gov/image/imagefly.cgi?cid="+this.referenceSpectrum.PubChem+"&width=300&height=300"
+            }
+          }
+        }
+
+        this.$.svg.innerHTML = "";
+        if(this.referenceURL || this.observedURL || this.structureLayout){
+          var total_width = 1300 ;
+          var total_height = 680 ;
+        } else {
+          var total_width = 1000 ;
+          var total_height = 680 ;
+        }
+        if (!this.peaks) {
+          return;
+        }
+
+        // TODO: make these controlled by custom CSS
+        var margin ;
+        if(this.referenceURL || this.observedURL || this.structureLayout){
+          margin = { top: 60, right: 20, bottom: 60, left: 360 };
+        } else {
+          margin = { top: 60, right: 20, bottom: 60, left: 60 };
+        }
+        
+        var width = total_width - margin.left - margin.right;
+        var height = total_height - margin.top - margin.bottom;
+
+        var top_level = d3.select(this.$.svg);  // Consider eliminating the need for the svg property
+        top_level
+        .attr("width", "100%")
+        .attr("height", "100%")
+        .attr("preserveAspectRatio","xMidYMid meet")
+        .attr("x", "0px")
+        .attr("y", "0px")
+        .attr("viewBox", "0 0 " + total_width + " " + total_height) ;
+
+        top_level
+        .append("defs")
+        .append("svg:clipPath")
+        .attr("id", "clip")
+        .append("svg:rect")
+        .attr("id", "clip-rect")
+        .attr("x", "0")
+        .attr("y", "0")
+        .attr("width", width)
+        .attr("height", height);
+
+        var groot = top_level.append('g').attr('transform', 'translate(' + margin.left + ',' + margin.top + ')');
+        var draw_target = groot.append('g').attr("clip-path", "url(#clip)").attr("id", "draw_target");
+        draw_target.append("svg:rect").attr("width", width).attr("height", height);
+
+        var redraw = () => {
+
+          var peaks = draw_target.selectAll('.peak');
+
+          peaks.transition()
+            .attr('x1', xMap)
+            .attr('y1', function (d) {
+              if (d.intensity >= 0.0) {
+                if(ymin < 0.0){
+                  return height / 2.0
+                } else {
+                  return height
+                }
+              } else {
+                return yMap(d)
+              }
+            })
+            .attr('x2', xMap)
+            .attr('y2', function (d) {
+              if (d.intensity < 0.0) {
+                return height / 2.0
+              } else {
+                return yMap(d)
+              }
+            });
+          
+          var peaklabels = draw_target.selectAll('.peaklabel');
+          var tcount = 0 ;
+          peaklabels.transition().attr('x',xMap).attr('y',function(d){
+            tcount++ ;
+            if(d.intensity < 0.0){
+              return yMap(d)+5;
+            } else {
+              return yMap(d)-5;
+            }
+          }).on("end", () => {tcount-- ; if(!tcount){this.eliminate_overlap(draw_target)}} );
+
+          xaxis_elem.transition().call(xAxis);
+          yaxis_elem.transition().call(yAxis);
+        }
+
+        var xScale = d3.scaleLinear().range([0, width]);
+        var yScale = d3.scaleLinear().range([height, 0]);
+
+        var xValue = function (d) {
+          return d.mz;
+        };
+
+        var yValue = function (d) {
+          return d.intensity;
+        };
+
+        var xMap = function (d) {
+          return xScale(xValue(d));
+        };
+
+        var yMap = function (d) {
+          return yScale(yValue(d));
+        };
+
+        var xAxis = d3.axisBottom(xScale);
+        var yAxis = d3.axisLeft(yScale).tickFormat((d) => this.default_format(Math.abs(d)));
+
+        var yValueInDomain = function (d) {
+          if (d.mz >= xScale.domain()[0] && d.mz <= xScale.domain()[1]) {
+            return Math.abs(yValue(d));
+          } else {
+            return 0;
+          };
+        };
+
+        var xmax = d3.max(this.peaks, xValue) * 1.05;
+        if (this.target_zoom) {
+          xScale.domain(this.target_zoom);
+        } else {
+          xScale.domain([0, xmax]);
+        }
+        var ymax = d3.max(this.peaks, yValueInDomain) * 1.1;
+        var ymin = d3.min(this.peaks, yValue)
+        if(ymin < 0.0){
+          yScale.domain([-1.0 * ymax, ymax]);
+        } else {
+          yScale.domain([0.0, ymax]);
+        }
+
+        // x-axis
+        var xaxis_elem = groot.append('g')
+          .attr('transform', 'translate(0,' + height + ')')
+          .call(xAxis);
+
+        xaxis_elem.append('text')
+          .attr('class', 'label')
+          .attr('x', width)
+          .attr('y', -6)
+          .style('text-anchor', 'end')
+          .text('m/z');
+
+        // y-axis
+        var yaxis_elem = groot.append('g')
+          .call(yAxis);
+        yaxis_elem.append('text')
+          .attr('class', 'label')
+          .attr('transform', 'rotate(-90)')
+          .attr('y', 6)
+          .attr('dy', '.71em')
+          .style('text-anchor', 'end')
+          .text('signal intensity');
+
+        if(ymin < 0.0){
+          draw_target.append('line').attr('class', 'mirror_divider')
+            .style('stroke', 'gray')
+            .style('opacity', 0.5)
+            .attr('x1', 0)
+            .attr('y1', height / 2)
+            .attr('x2', width)
+            .attr('y2', height / 2);
+        }
+
+        this.zooming = false;
+
+        var color = function (d) {
+          if (d.intensity >= 0) {
+            if (d.label) {
+              return "#006edd"
+            } else {
+              return "#6EB6FF"
+            }
+          } else {
+            if (d.label) {
+              return "green"
+            } else {
+              return "#00AC56"
+            }
+          }
+        }
+
+        this.peaks.sort((a,b)=>Math.abs(a.intensity)-Math.abs(b.intensity))
+        var gpeaks = draw_target.selectAll('.gpeak').data(this.peaks, this.key);
+        gpeaks.exit().remove();
+        var newpeaks= gpeaks.enter().append('g').attr('class','gpeak') ;
+        newpeaks.append('line')
+          .attr('id', this.key)
+          .attr('class', 'peak')
+          .on('mousedown', function (d) {
+          })
+          .on('mouseover', (d) => {
+            if (this.zooming) {
+              return;
+            }
+            if (d.label) {
+              if (d.label.endsWith(".png")) {
+                var img_src = d.label.split(" ").slice(-1) ;
+                if(d.intensity < 0.0){
+                  this.referenceImage.attr("href",img_src) ;
+                  this.referenceHighlighted = draw_target.select("#" + this.key(d)) ;
+                } else {
+                  this.observedImage.attr("href",img_src) ;
+                  this.observedHighlighted = draw_target.select("#" + this.key(d)) ;
+                }
+                draw_target.selectAll(".peak").classed('highlighted', false);
+                if(this.referenceHighlighted){
+                  this.referenceHighlighted.attr('class','peak highlighted')
+                }
+                if(this.observedHighlighted){
+                  this.observedHighlighted.attr('class','peak highlighted')
+                }
+              }
+            } 
+          })
+          .attr('x1', xMap)
+          .attr('y1', function (d) {
+            if (d.intensity > 0.0) {
+              if(ymin < 0.0){
+                return height / 2.0
+              } else {
+                return height
+              }
+            } else {
+              return yMap(d)
+            }
+          })
+          .attr('x2', xMap)
+          .attr('y2', function (d) {
+            if (d.intensity < 0.0) {
+              return height / 2.0
+            } else {
+              return yMap(d)
+            }
+          })
+          .style('stroke', color) ;
+
+        newpeaks.append('text').attr('class','peaklabel').attr('x',xMap).attr('y',function(d){
+          if(d.intensity < 0.0){
+            return yMap(d)+5;
+          } else {
+            return yMap(d)-5;
+          }
+        }).attr('style','text-anchor:middle;font-size:0.7rem;')
+        .style("font-style",function(d){
+          if(d.label){
+            if(d.label.endsWith(".png")){
+              return "italic" ;
+            }
+          }
+          return "normal" ;
+        })
+        .attr('alignment-baseline',function(d){
+          if(d.intensity < 0.0){
+            return "hanging" ;
+          } else {
+            return "baseline" ;
+          }
+        }).text(function(d){
+          if(d.label){
+            if (d.label.endsWith(".png")) {
+              var img_src = d.label.split(" ").slice(-1) ;
+              var offset = d.label.search(img_src) ;
+              return d.mz + ' (' + d.label.slice(0,offset-1) + ')' ;
+            } else {
+              return d.mz + ' (' + d.label + ')' ;
+            }
+          } else {
+            return d.mz
+          }
+        })
+
+        this.eliminate_overlap(draw_target) ;
+
+        xaxis_elem.call(xAxis);
+        yaxis_elem.call(yAxis);
+        if(this.observedSpectrum && this.observedSpectrum.Name){
+          // NOTE: Name is assumed to be present -- mspec description must point this out!
+          var displaySpecName = this.observedSpectrum.Name ;
+          if(this.observedSpectrum.Name.length > 70){
+            displaySpecName = this.observedSpectrum.Name.slice(0,70) + "..." ;
+          }
+          groot.append('text').attr('x', width/2)
+               .attr('y', -20).style('text-anchor', 'middle').style('font-size','1.5rem').text(displaySpecName);
+        }
+        if(this.referenceSpectrum && this.referenceSpectrum.Name){
+          // NOTE: Name is assumed to be present -- mspec description must point this out!
+          var displaySpecName2 = this.referenceSpectrum.Name ;
+          if(this.referenceSpectrum.Name.length > 70){
+            displaySpecName2 = this.referenceSpectrum.Name.slice(0,70) + "..." ;
+          }
+          groot.append('text').attr('x', width/2)
+               .attr('y', height+45).style('text-anchor', 'middle').style('font-size','1.5rem').text(displaySpecName2);
+        }
+
+        var imageside = 250 ;
+
+
+
+        if(this.observedURL && this.referenceURL){
+          groot.append('rect').attr('x',-340).attr('y',(height/2-imageside)/2).attr('width',imageside).attr('height',imageside).attr('stroke-width','5px').attr('stroke','blue') ;
+          this.observedImage = groot.append('image').attr('x',-340).attr('y',(height/2-imageside)/2).attr('width',imageside).attr('height',imageside)
+               .attr("href",this.observedURL) ;
+          groot.append('rect').attr('x',-340).attr('y',height/2 + (height/2-imageside)/2).attr('width',imageside).attr('height',imageside).attr('stroke-width','5px').attr('stroke','green') ;
+          this.referenceImage = groot.append('image').attr('x',-340).attr('y',height/2 + (height/2-imageside)/2).attr('width',imageside).attr('height',imageside)
+               .attr("href",this.referenceURL) ;
+        } else {
+          if(this.observedURL){
+          groot.append('rect').attr('x',-340).attr('y',(height-imageside)/2).attr('width',imageside).attr('height',imageside).attr('stroke-width','5px').attr('stroke','blue') ;
+          this.observedImage = groot.append('image').attr('x',-340).attr('y',(height-imageside)/2).attr('width',imageside).attr('height',imageside).attr("href",this.observedURL)
+               .attr("href",this.observedURL) ;
+          }
+          if(this.referenceURL){
+          groot.append('rect').attr('x',-340).attr('y',(height-imageside)/2).attr('width',imageside).attr('height',imageside).attr('stroke-width','5px').attr('stroke','green') ;
+          this.referenceImage = groot.append('image').attr('x',-340).attr('y',(height-imageside)/2).attr('width',imageside).attr('height',imageside).attr("href",this.referenceURL)
+               .attr("href",this.referenceURL) ;
+          }
+        }
+        
+
+
+
+        var that = this; // thisless javascript now!!!
+
+        draw_target.on("mousedown", function () {
+          d3.event.preventDefault();
+          d3.event.stopPropagation();
+          var container = this;
+          var origin = d3.mouse(container);
+          var rect = draw_target.append("rect").attr("class", "zoom");
+          origin[0] = Math.max(0, Math.min(width, origin[0]));
+          origin[1] = Math.max(0, Math.min(height, origin[1]));
+          that.zooming = true;
+
+
+          d3.select(window)
+            .on("mousemove.zoomRect", function () {
+              d3.event.preventDefault();
+              d3.event.stopPropagation()
+              var m = d3.mouse(container);
+              m[0] = Math.max(0, Math.min(width, m[0]));
+              m[1] = Math.max(0, Math.min(height, m[1]));
+              rect.attr("x", Math.min(origin[0], m[0]))
+                .attr("y", 0)
+                .attr("width", Math.abs(m[0] - origin[0]))
+                .attr("height", height);
+            })
+            .on("mouseup.zoomRect", function () {
+              d3.event.preventDefault();
+              d3.event.stopPropagation()
+              that.zooming = false;
+              d3.select(window).on("mousemove.zoomRect", null).on("mouseup.zoomRect", null);
+              var m = d3.mouse(container);
+              m[0] = Math.max(0, Math.min(width, m[0]));
+              m[1] = Math.max(0, Math.min(height, m[1]));
+              if (m[0] !== origin[0]) {
+                var x1 = xScale.invert(origin[0]);
+                var x2 = xScale.invert(m[0]);
+                var y1 = yScale.invert(origin[1]);
+                var y2 = yScale.invert(m[1]);
+                xScale.domain([Math.min(x1, x2), Math.max(x1, x2)]);
+                var the_ymax = d3.max(that.peaks, yValueInDomain)*1.1;
+                that.target_zoom = [Math.min(x1, x2), Math.max(x1, x2)];
+                if(ymin < 0.0){
+                  yScale.domain([-1.0 * the_ymax, the_ymax]);
+                } else {
+                  yScale.domain([0.0, the_ymax]);
+                }
+              }
+              rect.remove();
+              redraw();
+            });
+        });
+
+        draw_target.on("dblclick", function () {
+          that.target_zoom = null;
+          xScale.domain([0, d3.max(that.peaks, xValue) * 1.05]);
+          var the_ymax = d3.max(that.peaks, yValueInDomain)*1.1;
+          if(ymin < 0.0){
+            yScale.domain([-1.0 * the_ymax, the_ymax]);
+          } else {
+            yScale.domain([0.0, the_ymax]);
+          }
+          redraw();
+        });
+
+      }
+
+      ready() {
+        super.ready();
+        Polymer.RenderStatus.beforeNextRender(this, function () {
+          this.plot_spectrum();
+        });
+      }
+
+    }
+    window.customElements.define(SpectrumPlot.is, SpectrumPlot);
+  </script>
+</dom-module>

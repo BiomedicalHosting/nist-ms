@@ -1,0 +1,93 @@
+<link rel="import" href="../polymer/polymer.html">
+<link rel="import" href="../iron-ajax/iron-ajax.html">
+
+<dom-module id="mspec-spectrum">
+  <template>
+    <iron-ajax auto url="[[src]]" handle-as="text" last-response="{{msp_text}}" </iron-ajax>
+  </template>
+  <script>
+    class MSPECSpectrum extends Polymer.Element {
+
+      ready() {
+        super.ready();
+        if (this.innerHTML) {
+          this.msp_text = this.innerHTML;
+        }
+      }
+
+      static get properties() {
+        return {
+          src: {
+            type: String
+          },
+
+          msp_text: {
+            type: String,
+            observer: '_give_parent',
+          },
+
+          spectrum: {
+            type: Object
+          }
+        }
+      }
+
+      static get is() {
+        return 'mspec-spectrum';
+      }
+
+      _give_parent(newValue, oldValue) {
+        if (newValue) {
+          this.spectrum = this.parse();
+          this.parentNode.spectrum = this.spectrum;
+        }
+      }
+
+      extract_field(fieldname, cast) {
+        let start = this.msp_text.indexOf(fieldname + ": ") + fieldname.length + 2
+        let stop = this.msp_text.slice(start).indexOf("\n")
+        let string_val = this.msp_text.slice(start, start + stop)
+        if (cast) {
+          return (cast(string_val));
+        } else {
+          return string_val;
+        }
+      }
+
+      parse() {
+        var spec_obj = { peaks: [], synonyms: [] };
+        for (var line of this.msp_text.split("\n")) {
+          var tline = line.trim();
+          if (tline) {
+            var colon_offset = tline.indexOf(":");
+            var space_offset = tline.indexOf(" ");
+            if (colon_offset == -1 || colon_offset > space_offset) {
+              var values = tline.split(" ");
+              var quote_offset = tline.indexOf('"');
+              var mz = parseFloat(values[0]);
+              var intensity = parseFloat(values[1]);
+              var label = undefined;
+              if (quote_offset > -1) {
+                label = tline.slice(quote_offset + 1, -1)
+              }
+              spec_obj.peaks.push({ mz, intensity, label });
+            } else {
+              if (colon_offset > -1) {
+                var prop = tline.slice(0, colon_offset);
+                var value = tline.slice(space_offset + 1);
+                if (prop == "Synon") {
+                  spec_obj.synonyms.push(value);
+                } else {
+                  spec_obj[prop] = value;
+                }
+              }
+            }
+          }
+        };
+        return spec_obj;
+      }
+    };
+
+    window.customElements.define(MSPECSpectrum.is, MSPECSpectrum);
+  </script>
+</dom-module>

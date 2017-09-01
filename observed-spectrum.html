@@ -1,0 +1,31 @@
+<link rel="import" href="../polymer/polymer.html">
+
+<dom-module id="observed-spectrum">
+  <template>
+  </template>
+  <script>
+    class ObservedSpectrum extends Polymer.Element {
+
+      static get properties() {
+        return {
+          spectrum: {
+            type: Object,
+            value: undefined 
+          }
+        }
+      }
+
+      static get is() {
+        return 'observed-spectrum';
+      }
+
+      set spectrum(value) {
+        if (value) {
+          this.parentNode.observedSpectrum = value;
+        }
+      }
+
+    };
+    window.customElements.define(ObservedSpectrum.is, ObservedSpectrum);
+  </script>
+</dom-module>
